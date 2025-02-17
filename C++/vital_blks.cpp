@@ -1,82 +1,101 @@
 #include <stdio.h>
-#include <stdlib.h>  // exit()
+#include <stdlib.h> // exit()
 #include <assert.h>
 #include "zlib128/zlib.h"
 #include <string>
 #include <vector>
 #include <map>
-#include <stdarg.h>  // For va_start, etc.
-#include <memory>    // For std::unique_ptr
+#include <stdarg.h> // For va_start, etc.
+#include <memory>	// For std::unique_ptr
 #include <time.h>
-#include <set> 
+#include <set>
 #include <iostream>
 #include "GZReader.h"
 #include "Util.h"
 #include <random>
 #include <limits.h>
+#include <cfloat> // Required for DBL_MAX
 
 using namespace std;
 
-void print_usage(const char* progname) {
+void print_usage(const char *progname)
+{
 	fprintf(stderr, "Usage : %s INPUT_FILENAME [OUTPUT_FOLDER]\n\n", basename(progname).c_str());
 }
 
-int main(int argc, char* argv[]) {
+int main(int argc, char *argv[])
+{
 	random_device rd;
 	mt19937_64 rnd(rd());
 
 	srand(time(nullptr));
 
-	const char* progname = argv[0];
-	argc--; argv++; // ÀÚ±â ÀÚ½ÅÀÇ ½ÇÇà ÆÄÀÏ¸í Á¦°Å
+	const char *progname = argv[0];
+	argc--;
+	argv++; // skip self
 
-	if (argc < 1) { // ÃÖ¼Ò 1°³ÀÇ ÀÔ·Â (ÆÄÀÏ¸í)Àº ÀÖ¾î¾ßÇÔ
+	if (argc < 1)
+	{
 		print_usage(progname);
 		return -1;
 	}
 
-	// filenameÀº E1_190601_213110.vital
-	// caseid´Â E1_190601_213110
+	// File + caseid
 	string filename = basename(argv[0]);
 	string caseid = filename;
-	auto dotpos = caseid.rfind('.'); // remove extension
-	if (dotpos != -1) caseid = caseid.substr(0, dotpos);
+	auto dotpos = caseid.rfind('.');
+	if (dotpos != -1)
+		caseid = caseid.substr(0, dotpos);
 
+	// Output folder
 	string odir = ".";
-	if (argc > 1) odir = argv[1];
-	
-	GZReader gz(argv[0]); // ÆÄÀÏÀ» ¿­¾î
-	if (!gz.opened()) {
-		fprintf(stderr, "file does not exists\n");
+	if (argc > 1)
+		odir = argv[1];
+
+	// Open GZ
+	GZReader gz(argv[0]);
+	if (!gz.opened())
+	{
+		fprintf(stderr, "file does not exist\n");
 		return -1;
 	}
 
-	// header
+	// Check signature
 	char sign[4];
-	if (!gz.read(sign, 4)) return -1;
-	if (strncmp(sign, "VITA", 4) != 0) {
-		fprintf(stderr, "file does not seem to be a vital file\n");
+	if (!gz.read(sign, 4))
+		return -1;
+	if (strncmp(sign, "VITA", 4) != 0)
+	{
+		fprintf(stderr, "not a vital file\n");
 		return -1;
 	}
-	if (!gz.skip(4)) return -1; // version
 
+	// Skip version
+	if (!gz.skip(4))
+		return -1;
+
+	// Read header
 	unsigned short headerlen; // header length
-	if (!gz.read(&headerlen, 2)) return -1;
+	if (!gz.read(&headerlen, 2))
+		return -1;
 
 	short dgmt;
-	if (headerlen >= 2) {
-		if (!gz.read(&dgmt, sizeof(dgmt))) return -1;
+	if (headerlen >= 2)
+	{
+		if (!gz.read(&dgmt, sizeof(dgmt)))
+			return -1;
 		headerlen -= 2;
 	}
 
-	if (!gz.skip(headerlen)) return -1;
-	headerlen += 2; // ¾Æ·¡¿¡¼­ Àç»ç¿ë ÇÏ±â À§ÇØ
+	if (!gz.skip(headerlen))
+		return -1;
+	headerlen += 2; // ?
 
-	// ÇÑ ¹ø ÈÈÀ¸¸é¼­ Æ®·¢ ÀÌ¸§, ½ÃÀÛ ½Ã°£, Á¾·á ½Ã°¢ ±¸ÇÔ
-	map<unsigned short, double> tid_dtstart; // Æ®·¢ÀÇ ½ÃÀÛ ½Ã°£
-	map<unsigned short, double> tid_dtend; // Æ®·¢ÀÇ Á¾·á ½Ã°£
+	// Various maps
+	map<unsigned short, double> tid_dtstart;
+	map<unsigned short, double> tid_dtend;
 	map<unsigned int, string> did_dnames;
-	map<unsigned short, unsigned char> tid_rectypes; // 1:wav,2:num,5:str
+	map<unsigned short, unsigned char> tid_rectypes;
 	map<unsigned short, unsigned char> tid_recfmts;
 	map<unsigned short, double> tid_gains;
 	map<unsigned short, double> tid_offsets;
@@ -89,278 +108,526 @@ int main(int argc, char* argv[]) {
 	double dtend = 0;
 
 	unsigned char rectype = 0;
-	unsigned int nsamp;
-	unsigned char recfmt;
-	unsigned int fmtsize;
-	double gain;
-	double offset;
+	unsigned int nsamp = 0;
+	unsigned char recfmt = 0;
+	unsigned int fmtsize = 0;
+	double gain = 0;
+	double offset = 0;
 	unsigned short infolen = 0;
 	double dt_rec_start = 0;
 	unsigned short tid = 0;
 
-	while (!gz.eof()) { // body´Â ÆÐÅ¶ÀÇ ¿¬¼ÓÀÌ´Ù.
+	// -----------------------------
+	// First main loop (type==0 or type==9 or type==1)
+	// -----------------------------
+	while (!gz.eof())
+	{
 		unsigned char type = 0;
-		if (!gz.read(&type, 1)) break;
+		if (!gz.read(&type, 1))
+			break;
 		unsigned int datalen = 0;
-		if (!gz.read(&datalen, 4)) break;
-		if (datalen > 1000000) break;
+		if (!gz.read(&datalen, 4))
+			break;
+		if (datalen > 1000000)
+			break;
 
-		// tname, tid, dname, did, type (NUM, STR, WAV), srate
-		if (type == 0) { // trkinfo
-			tid = 0; if (!gz.fetch(tid, datalen)) goto next_packet;
-			rectype = 0; if (!gz.fetch(rectype, datalen)) goto next_packet;
-			//cout << (int)rectype << endl;
-			unsigned char recfmt; if (!gz.fetch(recfmt, datalen)) goto next_packet;
+		if (type == 0)
+		{
+			// trkinfo
+			tid = 0;
+			if (!gz.fetch(tid, datalen))
+				goto skip_packet;
+
+			rectype = 0;
+			if (!gz.fetch(rectype, datalen))
+				goto skip_packet;
+
+			unsigned char recfmt_local;
+			if (!gz.fetch(recfmt_local, datalen))
+				goto skip_packet;
+
 			string tname, unit;
-			//float minval, maxval, srate;
 			float minval, maxval, srate = 0;
-			//cout << maxval << endl;
-			unsigned int col, did = 0;
+			unsigned int col = 0, did = 0;
 			double adc_gain = 1, adc_offset = 0;
-			unsigned char montype;
-			if (!gz.fetch(tname, datalen)) goto save_and_next_packet; // !SSH Changed from next_packet
-			if (!gz.fetch(unit, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(minval, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(maxval, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(col, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(srate, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(adc_gain, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(adc_offset, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(montype, datalen)) goto save_and_next_packet;
-			if (!gz.fetch(did, datalen)) goto save_and_next_packet;
+			unsigned char montype = 0;
 
-		save_and_next_packet:
-			string dname = did_dnames[did];
-			//cout << did << endl;
-			tid_tnames[tid] = tname;
-			tid_dnames[tid] = dname;
-			tid_rectypes[tid] = rectype;
-			//cout << dname << endl;
-			//cout << (int)rectype << endl;
-			tid_recfmts[tid] = recfmt;
-			tid_gains[tid] = adc_gain;
-			tid_offsets[tid] = adc_offset;
-			tid_srates[tid] = srate;
-			tid_dtstart[tid] = DBL_MAX;
-			tid_dtend[tid] = 0.0;
+			if (!gz.fetch(tname, datalen))
+				goto skip_packet;
+			if (!gz.fetch(unit, datalen))
+				goto skip_packet;
+			if (!gz.fetch(minval, datalen))
+				goto skip_packet;
+			if (!gz.fetch(maxval, datalen))
+				goto skip_packet;
+			if (!gz.fetch(col, datalen))
+				goto skip_packet;
+			if (!gz.fetch(srate, datalen))
+				goto skip_packet;
+			if (!gz.fetch(adc_gain, datalen))
+				goto skip_packet;
+			if (!gz.fetch(adc_offset, datalen))
+				goto skip_packet;
+			if (!gz.fetch(montype, datalen))
+				goto skip_packet;
+			if (!gz.fetch(did, datalen))
+				goto skip_packet;
+
+			{
+				// save into maps
+				string dname = did_dnames[did];
+				tid_tnames[tid] = tname;
+				tid_dnames[tid] = dname;
+				tid_rectypes[tid] = rectype;
+				tid_recfmts[tid] = recfmt_local;
+				tid_gains[tid] = adc_gain;
+				tid_offsets[tid] = adc_offset;
+				tid_srates[tid] = srate;
+				tid_dtstart[tid] = DBL_MAX;
+				tid_dtend[tid] = 0.0;
+			}
 		}
-
-		if (type == 9) { // devinfo
-			unsigned int did; if (!gz.fetch(did, datalen)) goto next_packet;
-			string dtype; if (!gz.fetch(dtype, datalen)) goto next_packet;
-			string dname; if (!gz.fetch(dname, datalen)) goto next_packet;
-			if (dname.empty()) dname = dtype;
+		else if (type == 9)
+		{
+			// devinfo
+			unsigned int did;
+			if (!gz.fetch(did, datalen))
+				goto skip_packet;
+			string dtype;
+			if (!gz.fetch(dtype, datalen))
+				goto skip_packet;
+			string dname;
+			if (!gz.fetch(dname, datalen))
+				goto skip_packet;
+			if (dname.empty())
+				dname = dtype;
 			did_dnames[did] = dname;
-			//cout << dname << endl;
-		} else if (type == 1) { // rec
-			unsigned short infolen = 0; if (!gz.fetch(infolen, datalen)) goto next_packet;
-			double dt_rec_start = 0; if (!gz.fetch(dt_rec_start, datalen)) goto next_packet;
-			if (!dt_rec_start) goto next_packet;
-			unsigned short tid = 0; if (!gz.fetch(tid, datalen)) goto next_packet;
+		}
+		else if (type == 1)
+		{
+			// rec
+			unsigned short infolen_local = 0;
+			if (!gz.fetch(infolen_local, datalen))
+				goto skip_packet;
+			double dt_rec_start_local = 0;
+			if (!gz.fetch(dt_rec_start_local, datalen))
+				goto skip_packet;
+			if (!dt_rec_start_local)
+				goto skip_packet;
+			unsigned short tid_local = 0;
+			if (!gz.fetch(tid_local, datalen))
+				goto skip_packet;
 
-			tids.insert(tid);
+			tids.insert(tid_local);
 
-			// Æ®·¢ ¼Ó¼ºÀ» °¡Á®¿È
-			rectype = tid_rectypes[tid]; // 1:wav,2:num,3:str
-			auto srate = tid_srates[tid];
-			unsigned int nsamp = 0;
-			double dt_rec_end = dt_rec_start; // ÇØ´ç ·¹ÄÚµå Á¾·á ½Ã°£
-			if (rectype == 1) { // wav
-				if (!gz.fetch(nsamp, datalen)) goto next_packet;
-				if (srate > 0) dt_rec_end += nsamp / srate;
+			// glean
+			auto rectype_local = tid_rectypes[tid_local];
+			auto srate_local = tid_srates[tid_local];
+			unsigned int nsamp_local = 0;
+			double dt_rec_end = dt_rec_start_local;
+			if (rectype_local == 1)
+			{
+				if (!gz.fetch(nsamp_local, datalen))
+					goto skip_packet;
+				if (srate_local > 0)
+					dt_rec_end += nsamp_local / srate_local;
 			}
 
-			// ½ÃÀÛ ½Ã°£, Á¾·á ½Ã°£À» ¾÷µ¥ÀÌÆ®
-			if (tid_dtstart[tid] > dt_rec_start) tid_dtstart[tid] = dt_rec_start;
-			if (tid_dtend[tid] < dt_rec_end) tid_dtend[tid] = dt_rec_end;
-			if (dtstart > dt_rec_start) dtstart = dt_rec_start;
-			if (dtend < dt_rec_end) dtend = dt_rec_end;
+			if (tid_dtstart[tid_local] > dt_rec_start_local)
+				tid_dtstart[tid_local] = dt_rec_start_local;
+			if (tid_dtend[tid_local] < dt_rec_end)
+				tid_dtend[tid_local] = dt_rec_end;
+			if (dtstart > dt_rec_start_local)
+				dtstart = dt_rec_start_local;
+			if (dtend < dt_rec_end)
+				dtend = dt_rec_end;
 		}
 
-	next_packet:
-		if (!gz.skip(datalen)) break;
+	skip_packet:
+		// always skip remainder of packet
+		if (!gz.skip(datalen))
+			break;
 	}
 
-	gz.rewind(); // µÇ °¨À½
+	// Rewind
+	gz.rewind();
+	if (!gz.skip(10 + headerlen))
+		return -1;
 
-	if (!gz.skip(10 + headerlen)) return -1; // Çì´õ¸¦ °Ç³Ê¶Ü
-
-	// ¸Þ¸ð¸®·Î ´Ù ¿Ã¸®ÀÚ
+	// Prepare containers
 	map<unsigned short, vector<pair<double, float>>> nums;
 	map<unsigned short, vector<pair<double, string>>> strs;
-	map<unsigned short, vector<short>> wavs; // ÀüÃ¼ Æ®·¢º°·Î ÇÏ³ª¾¿ »ý¼º
-	for (auto tid : tids) { // ¹Ì¸® º¤ÅÍ¸¦ »ý¼ºÇÏ¿© ´ë±Ô¸ð µ¥ÀÌÅÍÀÇ ÀÌµ¿À» ¹æÁöÇÑ´Ù.
+	map<unsigned short, vector<short>> wavs;
+
+	for (auto tid : tids)
+	{
 		auto rectype = tid_rectypes[tid];
-		if (rectype == 1) {
-			int wave_tid_size = ceil((tid_dtend[tid] - tid_dtstart[tid]) * tid_srates[tid]); // to make enough memory
-			wavs[tid] = vector<short>(wave_tid_size, SHRT_MAX); // SHRT_MAX for blank
+		if (rectype == 1) // wav
+		{
+			int wave_tid_size = (int)ceil((tid_dtend[tid] - tid_dtstart[tid]) * tid_srates[tid]);
+			wavs[tid] = vector<short>(wave_tid_size, SHRT_MAX);
 		}
-		else if (rectype == 2) {
+		else if (rectype == 2)
+		{
 			nums[tid] = vector<pair<double, float>>();
 		}
-		else if(rectype == 5) {
+		else if (rectype == 5)
+		{
 			strs[tid] = vector<pair<double, string>>();
 		}
 	}
-	while (!gz.eof()) {// body¸¦ ´Ù½Ã parsing
-		unsigned char type = 0; if (!gz.read(&type, 1)) break;
-		unsigned int datalen = 0; if (!gz.read(&datalen, 4)) break;
-		if (datalen > 1000000) break;
-		if (type != 1) { goto next_packet2; } // ÀÌ¹ø¿¡´Â ·¹ÄÚµå¸¸ ÀÐÀ½
 
-		infolen = 0; if (!gz.fetch(infolen, datalen)) goto next_packet2;
-		dt_rec_start = 0; if (!gz.fetch(dt_rec_start, datalen)) goto next_packet2;
-		tid = 0; if (!gz.fetch(tid, datalen)) goto next_packet2;
-		if (!tid) goto next_packet2; // tid°¡ ¾øÀ¸¸é Ãâ·ÂÇÏÁö ¾ÊÀ½
-		if (dt_rec_start < tid_dtstart[tid]) goto next_packet2;
+	// -----------------------------
+	// Second main loop (type==1)
+	// -----------------------------
+	while (!gz.eof())
+	{
+		unsigned char type = 0;
+		if (!gz.read(&type, 1))
+			break;
+		unsigned int datalen = 0;
+		if (!gz.read(&datalen, 4))
+			break;
+		if (datalen > 1000000)
+			break;
 
-		// Æ®·¢ ¼Ó¼ºÀ» °¡Á®¿È
-		rectype = tid_rectypes[tid]; // 1:wav,2:num,3:str
-								 //cout << "rectype :" << (int)rectype << ", tid :" << tid << endl;
-		auto srate = tid_srates[tid];
-		nsamp = 0;
-		if (rectype == 1) if (!gz.fetch(nsamp, datalen)) { goto next_packet2; }
-		recfmt = tid_recfmts[tid]; // 1:flt,2:dbl,3:ch,4:byte,5:short,6:word,7:int,8:dword
-		fmtsize = 4;
-		switch (recfmt) {
-		case 2: fmtsize = 8; break;
-		case 3: case 4: fmtsize = 1; break;
-		case 5: case 6: fmtsize = 2; break;
+		// CHANGED: If not type==1, skip and continue
+		if (type != 1)
+		{
+			if (!gz.skip(datalen))
+				break;
+			continue;
 		}
-		//gain = gains[tid];
-		//offset = offsets[tid];
 
-		if (rectype == 1) { // wav
-			int idxrec = (dt_rec_start - dtstart) * srate;
-			auto& v = wavs[tid];
-			if (idxrec < 0) { goto next_packet2; }
-			if (idxrec + nsamp >= v.size()) { goto next_packet2; }
-			for (int i = 0; i < nsamp; i++) { // °¢ »ùÇÃ¿¡ ´ëÇØ
-				auto idxrow = idxrec + i; // Çö sampleÀÇ ÀÎµ¦½º
+		// We only handle type==1 below
+		infolen = 0;
+		if (!gz.fetch(infolen, datalen))
+		{
+			if (!gz.skip(datalen))
+				break;
+			continue;
+		}
 
-				short cnt = 0; // ¸ðµç »ùÇÃÀº short Çü cnt ·Î º¯È¯µÈ´Ù
-				switch (recfmt) {
-				case 1: {
-					//float fval; if (!gz.fetch(fval, datalen)) { goto next_packet2; }
-					//sval = string_format("%f", fval);
+		dt_rec_start = 0;
+		if (!gz.fetch(dt_rec_start, datalen))
+		{
+			if (!gz.skip(datalen))
+				break;
+			continue;
+		}
+
+		tid = 0;
+		if (!gz.fetch(tid, datalen))
+		{
+			if (!gz.skip(datalen))
+				break;
+			continue;
+		}
+
+		// CHANGED: if (!tid) skip
+		if (!tid)
+		{
+			if (!gz.skip(datalen))
+				break;
+			continue;
+		}
+
+		// CHANGED: if (dt_rec_start < tid_dtstart[tid]) skip
+		if (dt_rec_start < tid_dtstart[tid])
+		{
+			if (!gz.skip(datalen))
+				break;
+			continue;
+		}
+
+		// glean rectype
+		rectype = tid_rectypes[tid];
+		auto srate_local = tid_srates[tid];
+		nsamp = 0;
+		if (rectype == 1)
+		{
+			if (!gz.fetch(nsamp, datalen))
+			{
+				if (!gz.skip(datalen))
 					break;
-				}
-				case 2: {
-					//double fval; if (!gz.fetch(fval, datalen)) { goto next_packet2; }
-					//sval = string_format("%lf", fval);
-					break;
-				}
-				case 3: {
-					char ival; if (!gz.fetch(ival, datalen)) { goto next_packet2; }
-					cnt = ival;
-					break;
-				}
-				case 4: {
-					unsigned char ival; if (!gz.fetch(ival, datalen)) { goto next_packet2; }
-					cnt = ival;
-					break;
-				}
-				case 5: {
-					short ival; if (!gz.fetch(ival, datalen)) { goto next_packet2; }
-					cnt = ival;
-					break;
-				}
-				case 6: {
-					unsigned short ival; if (!gz.fetch(ival, datalen)) { goto next_packet2; }
-					cnt = ival;
-					break;
-				}
-				case 7: {
-					int ival; if (!gz.fetch(ival, datalen)) { goto next_packet2; }
-					cnt = ival;
-					break;
-				}
-				case 8: {
-					unsigned int ival; if (!gz.fetch(ival, datalen)) { goto next_packet2; }
-					cnt = ival;
-					break;
-				}
-				}
-				v[idxrow] = cnt;
+				continue;
 			}
-		} else if (rectype == 2) { // num
-			float fval; if (!gz.fetch(fval, datalen)) { goto next_packet2; }
+		}
+
+		recfmt = tid_recfmts[tid];
+		fmtsize = 4;
+		switch (recfmt)
+		{
+		case 2:
+			fmtsize = 8;
+			break;
+		case 3: // char
+		case 4: // unsigned char
+			fmtsize = 1;
+			break;
+		case 5: // short
+		case 6: // unsigned short
+			fmtsize = 2;
+			break;
+		case 7: // int
+		case 8: // unsigned int
+			fmtsize = 4;
+			break;
+		default:
+			fmtsize = 4;
+		}
+
+		// Based on rectype
+		if (rectype == 1)
+		{
+			// wav
+			int idxrec = (int)((dt_rec_start - dtstart) * srate_local);
+			auto &v = wavs[tid];
+			if (idxrec < 0)
+			{
+				if (!gz.skip(datalen))
+					break;
+				continue;
+			}
+			if (idxrec + (int)nsamp >= (int)v.size())
+			{
+				if (!gz.skip(datalen))
+					break;
+				continue;
+			}
+			for (int i = 0; i < (int)nsamp; i++)
+			{
+				short cnt = 0;
+				switch (recfmt)
+				{
+				case 3:
+				{
+					char ival;
+					if (!gz.fetch(ival, datalen))
+					{
+						if (!gz.skip(datalen))
+							break;
+						// break or continue?
+						// We should break out of the for-loop, but
+						// also must break from the WHILE (outer).
+						// Let's do a â€˜goto outer_loop_end;â€™ or
+						// do a little trick:
+						goto wave_done;
+					}
+					cnt = ival;
+				}
+				break;
+				case 4:
+				{
+					unsigned char ival;
+					if (!gz.fetch(ival, datalen))
+					{
+						if (!gz.skip(datalen))
+							break;
+						goto wave_done;
+					}
+					cnt = ival;
+				}
+				break;
+				case 5:
+				{
+					short ival;
+					if (!gz.fetch(ival, datalen))
+					{
+						if (!gz.skip(datalen))
+							break;
+						goto wave_done;
+					}
+					cnt = ival;
+				}
+				break;
+				case 6:
+				{
+					unsigned short ival;
+					if (!gz.fetch(ival, datalen))
+					{
+						if (!gz.skip(datalen))
+							break;
+						goto wave_done;
+					}
+					cnt = ival;
+				}
+				break;
+				case 7:
+				{
+					int ival;
+					if (!gz.fetch(ival, datalen))
+					{
+						if (!gz.skip(datalen))
+							break;
+						goto wave_done;
+					}
+					cnt = (short)ival;
+				}
+				break;
+				case 8:
+				{
+					unsigned int ival;
+					if (!gz.fetch(ival, datalen))
+					{
+						if (!gz.skip(datalen))
+							break;
+						goto wave_done;
+					}
+					cnt = (short)ival;
+				}
+				break;
+				case 1:
+				case 2:
+				default:
+					// floats/doubles are apparently not handled in
+					// your snippet, so skip them or parse them
+					// the same way
+					if (!gz.skip(fmtsize, datalen))
+					{
+						if (!gz.skip(datalen))
+							break;
+						goto wave_done;
+					}
+					break;
+				}
+				v[idxrec + i] = cnt;
+			}
+
+		wave_done:;
+		}
+		else if (rectype == 2)
+		{
+			// num
+			float fval;
+			if (!gz.fetch(fval, datalen))
+			{
+				if (!gz.skip(datalen))
+					break;
+				continue;
+			}
 			nums[tid].push_back(make_pair(dt_rec_start, fval));
-		} else if (rectype == 5) { // str
-			if (!gz.skip(4, datalen)) { goto next_packet2; }
-			string sval; if (!gz.fetch(sval, datalen)) { goto next_packet2; }
+		}
+		else if (rectype == 5)
+		{
+			// str
+			// skip 4 bytes?
+			if (!gz.skip(4, datalen))
+			{
+				if (!gz.skip(datalen))
+					break;
+				continue;
+			}
+			string sval;
+			if (!gz.fetch(sval, datalen))
+			{
+				if (!gz.skip(datalen))
+					break;
+				continue;
+			}
 			strs[tid].push_back(make_pair(dt_rec_start, sval));
 		}
 
-	next_packet2:
-		if (!gz.skip(datalen)) break;
-	}
+		// CHANGED: after parsing, skip leftover in the packet
+		if (!gz.skip(datalen))
+			break;
+	} // end while
 
-	// tid·ÎºÎÅÍ dbtid¸¦ »ý¼º
+	// Now do the rest of the logic as before...
 	map<unsigned int, unsigned long long> tid_dbtid;
-	for (auto tid : tids) {
-		if (tid_dbtid.find(tid) != tid_dbtid.end()) continue;
+	for (auto t : tids)
+	{
+		if (tid_dbtid.find(t) != tid_dbtid.end())
+			continue;
 		unsigned long long dbtid = rnd();
-		tid_dbtid[tid] = dbtid & LLONG_MAX;
+		tid_dbtid[t] = dbtid & LLONG_MAX;
 	}
 
-	// Æ®·¢ Á¤º¸¸¦ ÀúÀåÇÔ
+	// Write .trk.csv
 	auto f = ::fopen((odir + "/" + filename + ".trk.csv").c_str(), "wt");
-	for (auto tid : tids) {
-		// tid, filename, type(n,w,s), trkname, dtstart, dtend, srate, gain, offset
-		auto rectype = tid_rectypes[tid];
-		char type = 0;
-		if (rectype == 1) type = 'w';
-		else if (rectype == 2) type = 'n';
-		else if (rectype == 5) type = 's';
-		else continue;
-		fprintf(f, "%llu,\"%s\",%c,\"%s/%s\",%f,%f,%f,%f,%f\n", tid_dbtid[tid], caseid.c_str(), type, tid_dnames[tid].c_str(), tid_tnames[tid].c_str(), tid_dtstart[tid], tid_dtend[tid], tid_srates[tid], tid_gains[tid], tid_offsets[tid]);
-	}
-	::fclose(f);
+	for (auto t : tids)
+	{
+		auto rectype = tid_rectypes[t];
+		char tp = 0;
+		if (rectype == 1)
+			tp = 'w';
+		else if (rectype == 2)
+			tp = 'n';
+		else if (rectype == 5)
+			tp = 's';
+		else
+			continue;
 
-	// ¼ýÀÚ°ªÀ» ÀúÀåÇÔ
+		fprintf(f, "%llu,\"%s\",%c,\"%s/%s\",%f,%f,%f,%f,%f\n",
+				tid_dbtid[t],
+				caseid.c_str(),
+				tp,
+				tid_dnames[t].c_str(),
+				tid_tnames[t].c_str(),
+				tid_dtstart[t],
+				tid_dtend[t],
+				tid_srates[t],
+				tid_gains[t],
+				tid_offsets[t]);
+	}
+	fclose(f);
+
+	// Write .num.csv
 	f = ::fopen((odir + "/" + filename + ".num.csv").c_str(), "wt");
-	for (auto it : nums) {
-		auto& tid = it.first;
-		auto& recs = it.second;
-		for (auto& rec : recs) {
-			fprintf(f, "%llu,%f,%f\n", tid_dbtid[tid], rec.first, rec.second);
-		}
+	for (auto &it : nums)
+	{
+		auto t = it.first;
+		auto &recs = it.second;
+		for (auto &rec : recs)
+			fprintf(f, "%llu,%f,%f\n", tid_dbtid[t], rec.first, rec.second);
 	}
-	::fclose(f);
+	fclose(f);
 
+	// Write .str.csv
 	f = ::fopen((odir + "/" + filename + ".str.csv").c_str(), "wt");
-	for (auto it : strs) {
-		auto& tid = it.first;
-		auto& recs = it.second;
-		for (auto& rec : recs) {
-			fprintf(f, "%llu,%f,%s\n", tid_dbtid[tid], rec.first, escape_csv(rec.second).c_str());
+	for (auto &it : strs)
+	{
+		auto t = it.first;
+		auto &recs = it.second;
+		for (auto &rec : recs)
+		{
+			fprintf(f, "%llu,%f,%s\n",
+					tid_dbtid[t],
+					rec.first,
+					escape_csv(rec.second).c_str());
 		}
 	}
-	::fclose(f);
+	fclose(f);
 
-	// wav¸¦ ÀúÀåÇÔ
+	// Write .wav.csv
 	f = ::fopen((odir + "/" + filename + ".wav.csv").c_str(), "wt");
-	for (auto it : wavs) {
-		auto& tid = it.first;
-		auto& v = it.second;
-		auto srate = tid_srates[tid];
-		// 1ÃÊ¸¶´Ù ÇàÀ» ¸¸µç´Ù
-		for (auto dt = 0.0; dt < v.size() / srate; dt += 1.0) {
-			int idx_start = dt * srate;
-			int idx_end = idx_start + ceil(srate);
-			if (idx_end > v.size()) idx_end = v.size();
-			fprintf(f, "%llu,%f,\"", tid_dbtid[tid], dtstart + dt);
-			
-			for (int idx = idx_start; idx < idx_end; idx++) {
-				if (idx != idx_start) fputc(',', f);
-				if (SHRT_MAX != v[idx]) fprintf(f, "%d", v[idx]);
-			}
+	for (auto &it : wavs)
+	{
+		auto t = it.first;
+		auto &v = it.second;
+		auto sr = tid_srates[t];
+		double totalSeconds = (double)v.size() / sr;
+		for (double dt = 0.0; dt < totalSeconds; dt += 1.0)
+		{
+			int idx_start = (int)(dt * sr);
+			int idx_end = idx_start + (int)ceil(sr);
+			if (idx_end > (int)v.size())
+				idx_end = (int)v.size();
 
+			fprintf(f, "%llu,%f,\"", tid_dbtid[t], (dtstart + dt));
+			bool firstVal = true;
+			for (int idx = idx_start; idx < idx_end; idx++)
+			{
+				if (!firstVal)
+					fputc(',', f);
+				firstVal = false;
+				if (v[idx] != SHRT_MAX)
+					fprintf(f, "%d", v[idx]);
+			}
 			fprintf(f, "\"\n");
 		}
 	}
-	::fclose(f);
+	fclose(f);
 
 	return 0;
 }
