@@ -9,8 +9,8 @@
 
 // Example of the library function to save waveforms
 void save_waveforms_to_csv(const std::string &filename,
-                           const std::vector<float> &waveform1, const std::string &name1,
-                           const std::vector<float> &waveform2, const std::string &name2)
+                           const std::vector<double> &timestamps1, const std::vector<float> &waveform1, const std::string &name1,
+                           const std::vector<double> &timestamps2, const std::vector<float> &waveform2, const std::string &name2)
 {
     size_t max_samples = std::max(waveform1.size(), waveform2.size());
 
@@ -22,16 +22,26 @@ void save_waveforms_to_csv(const std::string &filename,
     }
 
     csv_file << std::fixed << std::setprecision(6);
-    csv_file << "Sample_Index," << name1 << "," << name2 << "\n";
+    csv_file << "Time," << name1 << "," << name2 << "\n";
 
     for (size_t i = 0; i < max_samples; i++)
     {
-        csv_file << i << ",";
+        // Get timestamp (use available timestamp or fallback to zero)
+        double timestamp = 0.0;
+        if (i < timestamps1.size())
+            timestamp = timestamps1[i];
+        else if (i < timestamps2.size())
+            timestamp = timestamps2[i];
+
+        csv_file << timestamp << ",";
+
+        // Write waveform values
         if (i < waveform1.size())
             csv_file << waveform1[i];
         csv_file << ",";
         if (i < waveform2.size())
             csv_file << waveform2[i];
+
         csv_file << "\n";
     }
 
@@ -239,14 +249,6 @@ VitalFileData parseVitalFile(const std::string &filename, bool isShort)
             if (!gz.fetch(tid, datalen))
                 goto skipPacket;
 
-            // Update global dtStart/dtEnd
-            if (result.dtStart == 0.0)
-                result.dtStart = dt;
-            else if (result.dtStart > dt)
-                result.dtStart = dt;
-            if (result.dtEnd < dt)
-                result.dtEnd = dt;
-
             // If user only wants short list, skip
             if (isShort)
             {
@@ -268,6 +270,7 @@ VitalFileData parseVitalFile(const std::string &filename, bool isShort)
                     goto skipPacket;
 
                 track.numericValues.push_back(fval);
+                track.recordTimestamps.push_back(dt);
 
                 // Update stats
                 if (track.count == 0)
@@ -298,7 +301,8 @@ VitalFileData parseVitalFile(const std::string &filename, bool isShort)
                 if (!gz.fetch_with_len(sval, datalen))
                     goto skipPacket;
                 sval.erase(std::remove_if(sval.begin(), sval.end(), isNotPrintable), sval.end());
-
+                track.stringValues.push_back(sval);
+                track.recordTimestamps.push_back(dt);
                 if (track.firstVal.empty())
                     track.firstVal = sval;
                 else
@@ -306,15 +310,22 @@ VitalFileData parseVitalFile(const std::string &filename, bool isShort)
             }
             else if (track.recType == 1)
             { // WAV
-                // For waveform data
-                // in your original code: num_samples = datalen / sizeof(float)
-                std::uint32_t num_samples = datalen / sizeof(float);
+                // Fetch the number of samples (first 4 bytes of the record data)
+                std::uint32_t num_samples = 0;
+                if (!gz.fetch(num_samples, datalen))
+                    goto skipPacket;
+
+                // Now fetch each float sample (assuming recfmt indicates float)
                 for (std::uint32_t i = 0; i < num_samples; i++)
                 {
                     float sample;
                     if (!gz.fetch(sample, datalen))
                         goto skipPacket;
                     track.waveform.push_back(sample);
+
+                    // Compute sample timestamp
+                    double sampleDt = dt + static_cast<double>(i) / track.sampleRate;
+                    track.waveformTimestamps.push_back(sampleDt);
                 }
             }
         }

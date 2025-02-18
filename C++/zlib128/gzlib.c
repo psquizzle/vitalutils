@@ -4,6 +4,10 @@
  */
 
 #include "gzguts.h"
+#define _POSIX_C_SOURCE 200809L
+#include <unistd.h>
+#include <fcntl.h>
+
 
 #if defined(_WIN32) && !defined(__BORLANDC__)
 #  define LSEEK _lseeki64

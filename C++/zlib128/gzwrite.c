@@ -4,6 +4,10 @@
  */
 
 #include "gzguts.h"
+#define _POSIX_C_SOURCE 200809L
+#include <unistd.h>
+#include <fcntl.h>
+
 
 /* Local functions */
 local int gz_init OF((gz_statep));

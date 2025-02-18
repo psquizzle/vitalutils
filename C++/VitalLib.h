@@ -27,8 +27,11 @@ struct TrackInfo
     std::string firstVal;
     // For numeric data
     std::vector<float> numericValues;
+    std::vector<double> recordTimestamps;  // Stores dt for NUM and STR
+    std::vector<std::string> stringValues; // Stores STR values
     // For waveform data
     std::vector<float> waveform;
+    std::vector<double> waveformTimestamps; // Stores per-sample timestamps for WAV
 };
 
 /**
@@ -56,8 +59,8 @@ struct VitalFileData
  * @param name2 Column name for second waveform.
  */
 void save_waveforms_to_csv(const std::string &filename,
-                           const std::vector<float> &waveform1, const std::string &name1,
-                           const std::vector<float> &waveform2, const std::string &name2);
+                           const std::vector<double> &timestamps1, const std::vector<float> &waveform1, const std::string &name1,
+                           const std::vector<double> &timestamps2, const std::vector<float> &waveform2, const std::string &name2);
 
 /**
  * @brief Whether a character is not printable ASCII (excluding tab, CR, LF).
